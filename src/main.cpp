@@ -38,31 +38,52 @@ cv::Mat applyHistEqualization(const cv::Mat &img, double clipLimit, const cv::Si
 cv::Mat applyPixSqrWithNormCh(const cv::Mat &channel)
 {
     assert(channel.type() == CV_8U);
+    cv::Size geometry = channel.size();
 
-    double delta, min, max;
-    minMaxLoc(channel, &min, &max);
-    delta = max - min > 0 ? max - min : 1;
+    // Копирование пикселей в новый вектор с расширением типа данных
+    // uchar -> uint16_t
+    size_t pixNum = channel.total();
+    std::vector<uint16_t> pix(pixNum);
 
-    cv::Mat res = channel.clone();
-    for (auto p = res.begin<uchar>(); p < res.end<uchar>(); p++)
+    // Возведение в квадрат
+    for (int i = 0; i < pixNum; i++)
     {
-        *p = uchar(255 * ((pow(int(*p), 2) - min) / delta));
+        pix[i] = pow(channel.at<uchar>(i), 2);
     }
 
-    return res;
+    // Нормализация значений
+    uint16_t max = *std::max_element(pix.begin(), pix.end());
+    uint16_t min = *std::min_element(pix.begin(), pix.end());
+    uint16_t delta = max - min > 0 ? max - min : 1;
+
+        for (auto i = pix.begin(); i < pix.end(); i++)
+    {
+        *i = 255 * (*i - min) / delta;
+    }
+
+    // Создание и заполнение внутреннего буфера матрицы
+    uchar *buffer = new uchar[pixNum];
+    for (int i = 0; i < pixNum; i++)
+    {
+        buffer[i] = uchar(pix[i]);
+    }
+
+    return cv::Mat(geometry, CV_8U, buffer);
 }
 
 cv::Mat applyPixSqrWithNorm(const cv::Mat &img)
 {
-    cv::Mat channels[3], resChannels[3], res;
+    cv::Mat channels[3];
     cv::split(img, channels);
 
+cv::Mat resChannels[3];
     resChannels[0] = applyPixSqrWithNormCh(channels[0]);
     for (int i = 1; i < 3; i++)
     {
         resChannels[i] = resChannels[0];
     }
 
+cv::Mat res;
     cv::merge(resChannels, 3, res);
     return res;
 }
