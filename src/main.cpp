@@ -13,6 +13,9 @@
 #include <Eigen/Core>
 #include <opencv2/core/eigen.hpp>
 
+#include <Eigen/Dense>
+#include <unsupported/Eigen/LevenbergMarquardt>
+
 // Выравнивание гистограммы
 cv::Mat applyHistEqualization(const cv::Mat &img, double clipLimit, const cv::Size &gridSize)
 {
@@ -30,7 +33,6 @@ cv::Mat applyHistEqualization(const cv::Mat &img, double clipLimit, const cv::Si
 
     return imgRes;
 }
-
 
 // Квадрат пикселей
 cv::Mat applyPixSqrWithNormCh(const cv::Mat &channel)
@@ -73,7 +75,7 @@ cv::Mat histEqualizationProcessor(const cv::Mat &img)
 cv::Mat blurProcessor(const cv::Mat &img)
 {
     cv::Mat res;
-    cv::GaussianBlur(img, res, cv::Size(3, 3), 0);
+    cv::GaussianBlur(img, res, cv::Size(1, 11), 0);
     return res;
 }
 
@@ -86,19 +88,19 @@ cv::Mat pixSqrAndNormProcessor(const cv::Mat &img)
 cv::Mat thresholdFilterProcessor(const cv::Mat &img)
 {
     cv::Mat mask, res;
-    cv::inRange(img, cv::Scalar(150, 20, 20), cv::Scalar(255, 255, 255), mask);
+    cv::inRange(img, cv::Scalar(90, 20, 20), cv::Scalar(255, 255, 255), mask);
     cv::bitwise_and(img, img, res, mask);
     return res;
 }
 
 cv::Mat erodeDilateProcessor(const cv::Mat &img)
 {
-    return img;
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(15, 2));
-    cv::Mat res;
-    cv::erode(img, res, kernel);
-    cv::dilate(res, res, kernel);
-    return res;
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(21, 1));
+    cv::Mat resEroded, resDilated;
+    cv::erode(img, resEroded, kernel);
+    cv::dilate(resEroded, resDilated, kernel);
+    cv::Size geometry = img.size();
+    return resDilated;
 }
 
 cv::Mat stubProcessor(const cv::Mat &img)
@@ -149,11 +151,99 @@ float calcMassCenter(const Eigen::VectorXi &in)
 {
     Eigen::VectorXf norm;
     calcNorm(in, norm);
-    auto a = Eigen::VectorXf::NullaryExpr([&norm](Eigen::Index i)
+
+    auto a = Eigen::VectorXf::NullaryExpr(norm.size(), [&norm](Eigen::Index i)
                                           { return i * pow(norm(i), 2); });
-    auto b = in.unaryExpr([](float x)
-                          { return pow(x, 2); });
+    auto b = norm.unaryExpr([](float x)
+                            { return pow(x, 2); });
     return a.sum() / b.sum();
+}
+
+float gauss(float x, float a, float mu, float sigma)
+{
+    return a * exp(-0.5 * powf((x - mu) / sigma, 2));
+}
+
+struct GaussSolver : Eigen::DenseFunctor<double>
+{
+    Eigen::VectorXd x, y;
+
+    GaussSolver(const Eigen::MatrixX2d &f_variables) : DenseFunctor<double>(
+                                                           3,
+                                                           f_variables.rows()),
+                                                       x(f_variables.col(0)),
+                                                       y(f_variables.col(1))
+    {
+    }
+
+    int operator()(const InputType &coeffs, ValueType &f_values)
+    {
+        double a = coeffs[0];
+        double mu = coeffs[1];
+        double sigma = coeffs[2];
+
+        auto power = -(x - ValueType::Constant(values(), mu)).array() / sigma;
+        f_values = a * (-0.5 * power.square()).exp() - y.array();
+        return 0;
+    }
+
+    int df(const InputType &coeffs, JacobianType &f_values)
+    {
+        double a = coeffs[0];
+        double mu = coeffs[1];
+        double sigma = coeffs[2];
+
+        auto muVector = ValueType::Constant(values(), mu);
+
+        auto j0 = (-0.5 * ((x - muVector).array() / sigma).square()).exp();
+        auto j1 = a * (x - muVector).array() / pow(sigma, 2) * j0;
+
+        f_values.col(0) = j0;
+        f_values.col(1) = j1;
+        f_values.col(2) = (x - muVector).array() * j1 / sigma;
+
+        return 0;
+    }
+};
+
+float calcIntenseAccurate(const Eigen::VectorXi &in)
+{
+    std::vector<double> test;
+
+    for (auto p : in)
+    {
+        test.push_back(p);
+    }
+
+    auto x = Eigen::VectorXd::LinSpaced(220, 0, 219);
+    auto y = Eigen::Map<Eigen::VectorXd>(test.data(), test.size());
+
+    Eigen::MatrixX2d f(x.size(), 2);
+    f << x, y;
+
+    GaussSolver gaussSolver(f);
+
+    int ixMax;
+    double a = in.maxCoeff(&ixMax);
+    double mu = in[ixMax];
+    auto deviationVector = in.unaryExpr([mu](int x)
+                                        { return pow(x - mu, 2); });
+    double sigma = sqrt(deviationVector.mean());
+
+    Eigen::VectorXd params(3);
+    params << a, mu, sigma;
+
+    Eigen::LevenbergMarquardt<GaussSolver> solver(gaussSolver);
+
+    solver.setXtol(1.0e-6);
+    solver.setFtol(1.0e-6);
+    solver.minimize(params);
+
+    a = params[0];
+    mu = params[1];
+    sigma = params[2];
+
+    return gauss(mu, a, mu, sigma);
 }
 
 // I = f(x)
@@ -163,16 +253,17 @@ int f(const cv::Mat &img, int x, float intense_delta_thr = 0.5)
     cv::Mat channels[3];
     cv::split(vert_line, channels);
 
-    Eigen::VectorXf red_channel;
-    cv::cv2eigen(channels[0], red_channel);
+    Eigen::VectorXi redChannel;
+    cv::cv2eigen(channels[0], redChannel);
 
-    Eigen::Index maxIndex;
+    Eigen::VectorXf normChannel;
+    calcNorm(redChannel, normChannel);
+    float max = normChannel.maxCoeff();
+    float mean = normChannel.mean();
 
-    // TODO: Считать по формуле Гаусса
-    red_channel.maxCoeff(&maxIndex);
-
-    // TODO: Добавить проверку на порог
-    return int(maxIndex);
+    // Расчет центра масс
+    int res = calcMassCenter(redChannel);
+    return max - mean > intense_delta_thr ? res : -1;
 }
 
 // Точка входа
@@ -192,6 +283,11 @@ int main(void)
     {
         int y = f(preparedImg, x);
 
+        if (y < 0)
+        {
+            continue;
+        }
+
         cv::Vec3b &rgb = resImage.at<cv::Vec3b>(y, x);
         for (int i = 0; i < 3; i++)
         {
@@ -199,10 +295,10 @@ int main(void)
         }
     }
 
-    // cv::Mat images[] = {img, preparedImg, blankImage};
-    cv::Mat images[] = {img, resImage};
+    cv::Mat images[] = {img, preparedImg, resImage};
     cv::Mat res;
     cv::vconcat(images, sizeof(images) / sizeof(images[0]), res);
+
     cv::imshow("res", res);
 
     cv::waitKey(0);
