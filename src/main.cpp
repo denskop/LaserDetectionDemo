@@ -1,5 +1,6 @@
 #include <cassert>
 #include <iostream>
+#include <filesystem>
 #include <vector>
 // cv::imread
 #include <opencv2/imgcodecs.hpp>
@@ -55,7 +56,7 @@ cv::Mat applyPixSqrWithNormCh(const cv::Mat &channel)
     uint16_t min = *std::min_element(pix.begin(), pix.end());
     uint16_t delta = max - min > 0 ? max - min : 1;
 
-        for (auto i = pix.begin(); i < pix.end(); i++)
+    for (auto i = pix.begin(); i < pix.end(); i++)
     {
         *i = 255 * (*i - min) / delta;
     }
@@ -75,14 +76,14 @@ cv::Mat applyPixSqrWithNorm(const cv::Mat &img)
     cv::Mat channels[3];
     cv::split(img, channels);
 
-cv::Mat resChannels[3];
+    cv::Mat resChannels[3];
     resChannels[0] = applyPixSqrWithNormCh(channels[0]);
     for (int i = 1; i < 3; i++)
     {
         resChannels[i] = resChannels[0];
     }
 
-cv::Mat res;
+    cv::Mat res;
     cv::merge(resChannels, 3, res);
     return res;
 }
@@ -101,8 +102,7 @@ cv::Mat blurProcessor(const cv::Mat &img)
 
 cv::Mat pixSqrAndNormProcessor(const cv::Mat &img)
 {
-    return img;
-    // return applyPixSqrWithNorm(img);
+    return img; // applyPixSqrWithNorm(img);
 }
 
 cv::Mat thresholdFilterProcessor(const cv::Mat &img)
@@ -196,14 +196,18 @@ struct GaussSolver : Eigen::DenseFunctor<double>
     {
     }
 
-    int operator()(const InputType &coeffs, ValueType &f_values)
+    int operator()(const InputType &coeffs, ValueType &f_error)
     {
         double a = coeffs[0];
         double mu = coeffs[1];
         double sigma = coeffs[2];
 
+        // Функция Гаусса
         auto p1 = (x - ValueType::Constant(values(), mu)).array() / sigma;
-        f_values = y.array() - a * (-0.5 * p1.square()).exp();
+        auto y_approx = a * (-0.5 * p1.square()).exp();
+
+        // Величина ошибки
+        f_error = y.array() - y_approx;
         return 0;
     }
 
@@ -227,21 +231,20 @@ struct GaussSolver : Eigen::DenseFunctor<double>
 
 float calcGaussFitting(const Eigen::VectorXi &in)
 {
-    std::vector<double> test;
-
+    std::vector<double> y_data;
     for (auto p : in)
     {
-        test.push_back(p);
+        y_data.push_back(p);
     }
 
+    // Табличные значения
     auto x = Eigen::VectorXd::LinSpaced(in.size(), 0, in.size() - 1);
-    auto y = Eigen::Map<Eigen::VectorXd>(test.data(), test.size());
+    auto y = Eigen::Map<Eigen::VectorXd>(y_data.data(), y_data.size());
 
     Eigen::MatrixX2d f(x.size(), 2);
     f << x, y;
 
-    GaussSolver gaussSolver(f);
-
+    // Начальные коэффициенты функции Гаусса
     int ixMax;
     double a = in.maxCoeff(&ixMax);
     double mu = in[ixMax];
@@ -251,17 +254,23 @@ float calcGaussFitting(const Eigen::VectorXi &in)
 
     Eigen::VectorXd params(3);
     params << a, mu, sigma;
-    Eigen::LevenbergMarquardt<GaussSolver> solver(gaussSolver);
 
+    // Аппроксимация
+    GaussSolver gaussSolver(f);
+    Eigen::LevenbergMarquardt<GaussSolver> solver(gaussSolver);
     solver.setXtol(1.0e-6);
     solver.setFtol(1.0e-6);
-Eigen::LevenbergMarquardtSpace::Status status = solver.minimize(params);
 
+    // Старт аппроксимации
+    Eigen::LevenbergMarquardtSpace::Status status = solver.minimize(params);
+
+    // Результат подбора коэффициентов
     a = params[0];
     mu = params[1];
     sigma = params[2];
 
     float res = mu;
+    // Отбраковка коэффициентов
     if (status != 1 || fabs(sigma) > 1.5 || mu < 0 || mu >= in.size())
     {
         res = -1;
@@ -284,7 +293,7 @@ float calcIntenseAccurate(const Eigen::VectorXi &in, bool &isGaussianFitting)
 // I = f(x)
 int f(const cv::Mat &img, int x, bool &isGaussianFitting, float intense_delta_thr = 0.7)
 {
-cv::Size geometry = img.size();
+    cv::Size geometry = img.size();
     cv::Mat vert_line = img.col(x);
     cv::Mat channels[3];
     cv::split(vert_line, channels);
@@ -292,24 +301,41 @@ cv::Size geometry = img.size();
     Eigen::VectorXi redChannel;
     cv::cv2eigen(channels[0], redChannel);
 
+    float res = calcIntenseAccurate(redChannel, isGaussianFitting);
+
     Eigen::VectorXf normChannel;
     calcNorm(redChannel, normChannel);
     float max = normChannel.maxCoeff();
     float mean = normChannel.mean();
 
-    float res = calcIntenseAccurate(redChannel, isGaussianFitting);
-    
     if (res < 0 || res > geometry.height || max - mean <= intense_delta_thr)
     {
-res = -1;
-}
+        res = -1;
+    }
     return round(res);
 }
 
 // Точка входа
-int main(void)
+int main(int argc, const char *argv[])
 {
-    cv::Mat img = cv::imread("./dataset/img_scan500.png");
+    const char *path = "./dataset/img_scan500.png";
+
+    if (argc > 1)
+    {
+        path = argv[1];
+    }
+    else
+    {
+        std::cout << "Загрузка тестового кадра из датасета..." << std::endl;
+    }
+
+    cv::Mat img = cv::imread(path);
+    if (img.empty())
+    {
+        std::filesystem::path p(path);
+        std::cout << "Ошибка при открытии файла " << p.filename() << std::endl;
+        return -1;
+    }
 
     std::vector<cv::Mat> processed;
     prepareImage(img, processed);
@@ -321,7 +347,7 @@ int main(void)
 
     for (int x = 0; x < geometry.width; x++)
     {
-bool isGaussianFitting;
+        bool isGaussianFitting;
         int y = f(preparedImg, x, isGaussianFitting);
 
         if (y < 0)
@@ -330,10 +356,9 @@ bool isGaussianFitting;
         }
 
         cv::Vec3b &rgb = resImage.at<cv::Vec3b>(y, x);
-        for (int i = 0; i < 3; i++)
-        {
-            rgb[i] = 0;
-        }
+        rgb[0] = isGaussianFitting ? 0 : 255;
+        rgb[1] = 0;
+        rgb[2] = isGaussianFitting ? 255 : 0;
     }
 
     cv::Mat images[] = {img, preparedImg, resImage};
