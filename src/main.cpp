@@ -222,7 +222,7 @@ struct GaussSolver : Eigen::DenseFunctor<double>
         auto p1 = (x - muVector).array() / sigma;
         auto p2 = (-0.5 * p1.square()).exp();
 
-        f_values.col(0) = -p2;
+        f_values.col(0) = p2;
         f_values.col(1) = -(a / sigma) * p2 * p1;
         f_values.col(2) = -(a / sigma) * p2 * p1.square();
         return 0;
