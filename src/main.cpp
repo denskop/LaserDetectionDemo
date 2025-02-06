@@ -203,7 +203,8 @@ struct GaussSolver : Eigen::DenseFunctor<double>
         double sigma = coeffs[2];
 
         // Функция Гаусса
-        auto p1 = (x - ValueType::Constant(values(), mu)).array() / sigma;
+        auto muVector = Eigen::VectorXd::Constant(values(), mu);
+        auto p1 = (x - muVector).array() / sigma;
         auto y_approx = a * (-0.5 * p1.square()).exp();
 
         // Величина ошибки
@@ -217,7 +218,7 @@ struct GaussSolver : Eigen::DenseFunctor<double>
         double mu = coeffs[1];
         double sigma = coeffs[2];
 
-        auto muVector = ValueType::Constant(values(), mu);
+        auto muVector = Eigen::VectorXd::Constant(values(), mu);
         auto p1 = (x - muVector).array() / sigma;
         auto p2 = (-0.5 * p1 * p1).exp();
 
