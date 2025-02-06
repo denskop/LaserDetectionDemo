@@ -1,7 +1,6 @@
 #include <cassert>
 #include <iostream>
 #include <vector>
-#include <opencv/cv.h>
 // cv::imread
 #include <opencv2/imgcodecs.hpp>
 // cv::ColorConversionCodes
@@ -10,11 +9,11 @@
 // cv::imshow
 #include <opencv2/highgui.hpp>
 // CV <-> Eigen
-#include <Eigen/Core>
+#include <eigen3/Eigen/Core>
 #include <opencv2/core/eigen.hpp>
 
-#include <Eigen/Dense>
-#include <unsupported/Eigen/LevenbergMarquardt>
+#include <eigen3/Eigen/Dense>
+#include <eigen3/unsupported/Eigen/LevenbergMarquardt>
 
 // Выравнивание гистограммы
 cv::Mat applyHistEqualization(const cv::Mat &img, double clipLimit, const cv::Size &gridSize)
