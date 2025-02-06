@@ -102,13 +102,13 @@ cv::Mat blurProcessor(const cv::Mat &img)
 
 cv::Mat pixSqrAndNormProcessor(const cv::Mat &img)
 {
-    return img; // applyPixSqrWithNorm(img);
+    return applyPixSqrWithNorm(img);
 }
 
 cv::Mat thresholdFilterProcessor(const cv::Mat &img)
 {
     cv::Mat mask, res;
-    cv::inRange(img, cv::Scalar(90, 20, 20), cv::Scalar(255, 255, 255), mask);
+    cv::inRange(img, cv::Scalar(83, 0, 0), cv::Scalar(255, 255, 255), mask);
     cv::bitwise_and(img, img, res, mask);
     return res;
 }
@@ -222,7 +222,7 @@ struct GaussSolver : Eigen::DenseFunctor<double>
         auto p1 = (x - muVector).array() / sigma;
         auto p2 = (-0.5 * p1.square()).exp();
 
-        f_values.col(0) = p2;
+        f_values.col(0) = -p2;
         f_values.col(1) = -(a / sigma) * p2 * p1;
         f_values.col(2) = -(a / sigma) * p2 * p1.square();
         return 0;
@@ -271,7 +271,7 @@ float calcGaussFitting(const Eigen::VectorXi &in)
 
     float res = mu;
     // Отбраковка коэффициентов
-    if (status != 1 || fabs(sigma) > 1.5 || mu < 0 || mu >= in.size())
+    if (status != 1 || fabs(sigma) > 7 || mu < 0 || mu >= in.size())
     {
         res = -1;
     }
