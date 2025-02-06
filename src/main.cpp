@@ -180,14 +180,14 @@ float calcMassCenter(const Eigen::VectorXi &in)
     return a.sum() / b.sum();
 }
 
-float gauss(float x, float a, float mu, float sigma)
-{
-    return a * exp(-0.5 * powf((x - mu) / sigma, 2));
-}
-
 struct GaussSolver : Eigen::DenseFunctor<double>
 {
     Eigen::VectorXd x, y;
+
+    float gauss(float x, float a, float mu, float sigma)
+    {
+        return a * exp(-0.5 * powf((x - mu) / sigma, 2));
+    }
 
     GaussSolver(const Eigen::MatrixX2d &f_variables) : DenseFunctor<double>(
                                                            3,
@@ -203,8 +203,8 @@ struct GaussSolver : Eigen::DenseFunctor<double>
         double mu = coeffs[1];
         double sigma = coeffs[2];
 
-        auto power = -(x - ValueType::Constant(values(), mu)).array() / sigma;
-        f_values = a * (-0.5 * power.square()).exp() - y.array();
+        auto p1 = (x - ValueType::Constant(values(), mu)).array() / sigma;
+        f_values = y.array() - a * (-0.5 * p1.square()).exp();
         return 0;
     }
 
@@ -215,19 +215,18 @@ struct GaussSolver : Eigen::DenseFunctor<double>
         double sigma = coeffs[2];
 
         auto muVector = ValueType::Constant(values(), mu);
+        auto p1 = (x - muVector).array() / sigma;
+        auto p2 = (-0.5 * p1 * p1).exp();
 
-        auto j0 = (-0.5 * ((x - muVector).array() / sigma).square()).exp();
-        auto j1 = a * (x - muVector).array() / pow(sigma, 2) * j0;
-
-        f_values.col(0) = j0;
-        f_values.col(1) = j1;
-        f_values.col(2) = (x - muVector).array() * j1 / sigma;
+        f_values.col(0) = -p2;
+        f_values.col(1) = -(a / sigma) * p2 * p1;
+        f_values.col(2) = -(a / sigma) * p2 * (p1 * p1);
 
         return 0;
     }
 };
 
-float calcIntenseAccurate(const Eigen::VectorXi &in)
+float calcGaussFitting(const Eigen::VectorXi &in)
 {
     std::vector<double> test;
 
@@ -236,7 +235,7 @@ float calcIntenseAccurate(const Eigen::VectorXi &in)
         test.push_back(p);
     }
 
-    auto x = Eigen::VectorXd::LinSpaced(220, 0, 219);
+    auto x = Eigen::VectorXd::LinSpaced(in.size(), 0, in.size() - 1);
     auto y = Eigen::Map<Eigen::VectorXd>(test.data(), test.size());
 
     Eigen::MatrixX2d f(x.size(), 2);
@@ -253,23 +252,40 @@ float calcIntenseAccurate(const Eigen::VectorXi &in)
 
     Eigen::VectorXd params(3);
     params << a, mu, sigma;
-
     Eigen::LevenbergMarquardt<GaussSolver> solver(gaussSolver);
 
     solver.setXtol(1.0e-6);
     solver.setFtol(1.0e-6);
-    solver.minimize(params);
+Eigen::LevenbergMarquardtSpace::Status status = solver.minimize(params);
 
     a = params[0];
     mu = params[1];
     sigma = params[2];
 
-    return gauss(mu, a, mu, sigma);
+    float res = mu;
+    if (status != 1 || fabs(sigma) > 1.5 || mu < 0 || mu >= in.size())
+    {
+        res = -1;
+    }
+    return res;
+}
+
+float calcIntenseAccurate(const Eigen::VectorXi &in, bool &isGaussianFitting)
+{
+    float res = calcGaussFitting(in);
+    isGaussianFitting = res < 0 ? false : true;
+
+    if (res < 0)
+    {
+        res = calcMassCenter(in);
+    }
+    return res;
 }
 
 // I = f(x)
-int f(const cv::Mat &img, int x, float intense_delta_thr = 0.5)
+int f(const cv::Mat &img, int x, bool &isGaussianFitting, float intense_delta_thr = 0.7)
 {
+cv::Size geometry = img.size();
     cv::Mat vert_line = img.col(x);
     cv::Mat channels[3];
     cv::split(vert_line, channels);
@@ -282,9 +298,13 @@ int f(const cv::Mat &img, int x, float intense_delta_thr = 0.5)
     float max = normChannel.maxCoeff();
     float mean = normChannel.mean();
 
-    // Расчет центра масс
-    int res = calcMassCenter(redChannel);
-    return max - mean > intense_delta_thr ? res : -1;
+    float res = calcIntenseAccurate(redChannel, isGaussianFitting);
+    
+    if (res < 0 || res > geometry.height || max - mean <= intense_delta_thr)
+    {
+res = -1;
+}
+    return round(res);
 }
 
 // Точка входа
@@ -302,7 +322,8 @@ int main(void)
 
     for (int x = 0; x < geometry.width; x++)
     {
-        int y = f(preparedImg, x);
+bool isGaussianFitting;
+        int y = f(preparedImg, x, isGaussianFitting);
 
         if (y < 0)
         {
